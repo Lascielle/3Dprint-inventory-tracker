@@ -6,7 +6,6 @@ import streamlit as st
 import altair as alt
 import pandas as pd
 
-
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
     page_title="Inventory tracker",
@@ -51,138 +50,81 @@ def initialize_data(conn):
 
     cursor.execute(
         """
-        INSERT INTO inventory
-            (item_name, price, units_sold, units_left, cost_price, reorder_point, description)
-        VALUES
-            -- Beverages
-            ('Bottled Water (500ml)', 1.50, 115, 15, 0.80, 16, 'Hydrating bottled water'),
-            ('Soda (355ml)', 2.00, 93, 8, 1.20, 10, 'Carbonated soft drink'),
-            ('Energy Drink (250ml)', 2.50, 12, 18, 1.50, 8, 'High-caffeine energy drink'),
-            ('Coffee (hot, large)', 2.75, 11, 14, 1.80, 5, 'Freshly brewed hot coffee'),
-            ('Juice (200ml)', 2.25, 11, 9, 1.30, 5, 'Fruit juice blend'),
-
-            -- Snacks
-            ('Potato Chips (small)', 2.00, 34, 16, 1.00, 10, 'Salted and crispy potato chips'),
-            ('Candy Bar', 1.50, 6, 19, 0.80, 15, 'Chocolate and candy bar'),
-            ('Granola Bar', 2.25, 3, 12, 1.30, 8, 'Healthy and nutritious granola bar'),
-            ('Cookies (pack of 6)', 2.50, 8, 8, 1.50, 5, 'Soft and chewy cookies'),
-            ('Fruit Snack Pack', 1.75, 5, 10, 1.00, 8, 'Assortment of dried fruits and nuts'),
-
-            -- Personal Care
-            ('Toothpaste', 3.50, 1, 9, 2.00, 5, 'Minty toothpaste for oral hygiene'),
-            ('Hand Sanitizer (small)', 2.00, 2, 13, 1.20, 8, 'Small sanitizer bottle for on-the-go'),
-            ('Pain Relievers (pack)', 5.00, 1, 5, 3.00, 3, 'Over-the-counter pain relief medication'),
-            ('Bandages (box)', 3.00, 0, 10, 2.00, 5, 'Box of adhesive bandages for minor cuts'),
-            ('Sunscreen (small)', 5.50, 6, 5, 3.50, 3, 'Small bottle of sunscreen for sun protection'),
-
-            -- Household
-            ('Batteries (AA, pack of 4)', 4.00, 1, 5, 2.50, 3, 'Pack of 4 AA batteries'),
-            ('Light Bulbs (LED, 2-pack)', 6.00, 3, 3, 4.00, 2, 'Energy-efficient LED light bulbs'),
-            ('Trash Bags (small, 10-pack)', 3.00, 5, 10, 2.00, 5, 'Small trash bags for everyday use'),
-            ('Paper Towels (single roll)', 2.50, 3, 8, 1.50, 5, 'Single roll of paper towels'),
-            ('Multi-Surface Cleaner', 4.50, 2, 5, 3.00, 3, 'All-purpose cleaning spray'),
-
-            -- Others
-            ('Lottery Tickets', 2.00, 17, 20, 1.50, 10, 'Assorted lottery tickets'),
-            ('Newspaper', 1.50, 22, 20, 1.00, 5, 'Daily newspaper')
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sku_id INTEGER,
+            quantity INTEGER,
+            transaction_type TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
         """
     )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sku_dictionary (
+            sku_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sku_description TEXT
+        )
+        """
+    )
+
+    # Insert some data into the dictionary
+    cursor.execute(
+        """
+        INSERT INTO sku_dictionary (sku_description)
+        VALUES
+            ('Bottled Water'),
+            ('Soda'),
+            ('Energy Drink'),
+            ('Granola Bar')
+        """
+    )
+
     conn.commit()
 
 
-def load_data(conn):
-    """Loads the inventory data from the database."""
+def load_data(conn, table):
+    """Loads the data from the database."""
     cursor = conn.cursor()
 
     try:
-        cursor.execute("SELECT * FROM inventory")
+        cursor.execute(f"SELECT * FROM {table}")
         data = cursor.fetchall()
-    except:
+    except Exception as e:
         return None
 
-    df = pd.DataFrame(
-        data,
-        columns=[
-            "id",
-            "item_name",
-            "price",
-            "units_sold",
-            "units_left",
-            "cost_price",
-            "reorder_point",
-            "description",
-        ],
-    )
+    columns = []
+    if table == "inventory":
+        columns = ["id", "item_name", "price", "units_sold", "units_left", "cost_price", "reorder_point", "description"]
+    elif table == "sku_dictionary":
+        columns = ["sku_id", "sku_description"]
+
+    df = pd.DataFrame(data, columns=columns)
 
     return df
 
 
-def update_data(conn, df, changes):
-    """Updates the inventory data in the database."""
+def update_inventory(conn, sku_id, quantity, action):
+    """Updates the inventory by adding or removing stock."""
     cursor = conn.cursor()
 
-    if changes["edited_rows"]:
-        deltas = st.session_state.inventory_table["edited_rows"]
-        rows = []
+    if action == "add":
+        cursor.execute("UPDATE inventory SET units_left = units_left + ? WHERE id = ?", (quantity, sku_id))
+    elif action == "remove":
+        cursor.execute("UPDATE inventory SET units_left = units_left - ? WHERE id = ?", (quantity, sku_id))
 
-        for i, delta in deltas.items():
-            row_dict = df.iloc[i].to_dict()
-            row_dict.update(delta)
-            rows.append(row_dict)
-
-        cursor.executemany(
-            """
-            UPDATE inventory
-            SET
-                item_name = :item_name,
-                price = :price,
-                units_sold = :units_sold,
-                units_left = :units_left,
-                cost_price = :cost_price,
-                reorder_point = :reorder_point,
-                description = :description
-            WHERE id = :id
-            """,
-            rows,
-        )
-
-    if changes["added_rows"]:
-        cursor.executemany(
-            """
-            INSERT INTO inventory
-                (id, item_name, price, units_sold, units_left, cost_price, reorder_point, description)
-            VALUES
-                (:id, :item_name, :price, :units_sold, :units_left, :cost_price, :reorder_point, :description)
-            """,
-            (defaultdict(lambda: None, row) for row in changes["added_rows"]),
-        )
-
-    if changes["deleted_rows"]:
-        cursor.executemany(
-            "DELETE FROM inventory WHERE id = :id",
-            ({"id": int(df.loc[i, "id"])} for i in changes["deleted_rows"]),
-        )
+    # Log the transaction
+    cursor.execute("INSERT INTO transactions (sku_id, quantity, transaction_type) VALUES (?, ?, ?)", (sku_id, quantity, action))
 
     conn.commit()
 
 
 # -----------------------------------------------------------------------------
-# Draw the actual page, starting with the inventory table.
+# Build the app
 
 # Set the title that appears at the top of the page.
-"""
-# :shopping_bags: Inventory tracker
-
-**Welcome to Alice's Corner Store's intentory tracker!**
-This page reads and writes directly from/to our inventory database.
-"""
-
-st.info(
-    """
-    Use the table below to add, remove, and edit items.
-    And don't forget to commit your changes when you're done.
-    """
-)
+st.title(":shopping_bags: Inventory Tracker")
 
 # Connect to database and create table if needed
 conn, db_was_just_created = connect_db()
@@ -192,99 +134,52 @@ if db_was_just_created:
     initialize_data(conn)
     st.toast("Database initialized with some sample data.")
 
-# Load data from database
-df = load_data(conn)
+# Display inventory
+st.subheader("Current Inventory")
+df = load_data(conn, "inventory")
+if df is not None:
+    st.table(df)
 
-# Display data with editable table
-edited_df = st.data_editor(
-    df,
-    disabled=["id"],  # Don't allow editing the 'id' column.
-    num_rows="dynamic",  # Allow appending/deleting rows.
-    column_config={
-        # Show dollar sign before price columns.
-        "price": st.column_config.NumberColumn(format="$%.2f"),
-        "cost_price": st.column_config.NumberColumn(format="$%.2f"),
-    },
-    key="inventory_table",
-)
+# Load SKU dictionary for the transaction section
+sku_df = load_data(conn, "sku_dictionary")
 
-has_uncommitted_changes = any(len(v) for v in st.session_state.inventory_table.values())
+# Transaction Section
+st.subheader("Transact Inventory")
 
-st.button(
-    "Commit changes",
-    type="primary",
-    disabled=not has_uncommitted_changes,
-    # Update data in database
-    on_click=update_data,
-    args=(conn, df, st.session_state.inventory_table),
-)
+if sku_df is not None:
+    # Dropdown to select SKU (with both ID and description)
+    sku_options = {row['sku_id']: f"{row['sku_id']} - {row['sku_description']}" for _, row in sku_df.iterrows()}
+    selected_sku_id = st.selectbox("Select SKU", options=list(sku_options.keys()), format_func=lambda x: sku_options[x])
 
+    quantity = st.number_input("Quantity", min_value=1, step=1)
 
-# -----------------------------------------------------------------------------
-# Now some cool charts
+    col1, col2 = st.columns(2)
 
-# Add some space
-""
-""
-""
+    with col1:
+        if st.button("Receive Inventory"):
+            update_inventory(conn, selected_sku_id, quantity, "add")
+            st.success(f"Added {quantity} units to SKU {selected_sku_id}")
 
-st.subheader("Units left", divider="red")
-
-need_to_reorder = df[df["units_left"] < df["reorder_point"]].loc[:, "item_name"]
-
-if len(need_to_reorder) > 0:
-    items = "\n".join(f"* {name}" for name in need_to_reorder)
-
-    st.error(f"We're running dangerously low on the items below:\n {items}")
-
-""
-""
-
-st.altair_chart(
-    # Layer 1: Bar chart.
-    alt.Chart(df)
-    .mark_bar(
-        orient="horizontal",
-    )
-    .encode(
-        x="units_left",
-        y="item_name",
-    )
-    # Layer 2: Chart showing the reorder point.
-    + alt.Chart(df)
-    .mark_point(
-        shape="diamond",
-        filled=True,
-        size=50,
-        color="salmon",
-        opacity=1,
-    )
-    .encode(
-        x="reorder_point",
-        y="item_name",
-    ),
-    use_container_width=True,
-)
-
-st.caption("NOTE: The :diamonds: location shows the reorder point.")
-
-""
-""
-""
+    with col2:
+        if st.button("Remove Inventory"):
+            update_inventory(conn, selected_sku_id, quantity, "remove")
+            st.warning(f"Removed {quantity} units from SKU {selected_sku_id}")
 
 # -----------------------------------------------------------------------------
+# Charts Section
 
-st.subheader("Best sellers", divider="orange")
+st.subheader("Inventory Status")
 
-""
-""
+# Add a bar chart for units left and reorder points
+if df is not None:
+    need_to_reorder = df[df["units_left"] < df["reorder_point"]].loc[:, "item_name"]
+    if len(need_to_reorder) > 0:
+        items = "\n".join(f"* {name}" for name in need_to_reorder)
+        st.error(f"Reorder needed for:\n {items}")
 
-st.altair_chart(
-    alt.Chart(df)
-    .mark_bar(orient="horizontal")
-    .encode(
-        x="units_sold",
-        y=alt.Y("item_name").sort("-x"),
-    ),
-    use_container_width=True,
-)
+    st.altair_chart(
+        alt.Chart(df)
+        .mark_bar()
+        .encode(x="units_left", y="item_name"),
+        use_container_width=True,
+    )
